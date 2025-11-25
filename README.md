@@ -1,5 +1,4 @@
-# Differential Analyses of Gene Expression
-## Bladder Urothelial Carcinoma
+# Differential Analyses of Gene Expression: Bladder Urothelial Carcinoma
 
 This repository contains the Digital Epidemiology and Precision Medicine project for the Data Science Master's Degree at La Sapienza, Università di Roma.
 
