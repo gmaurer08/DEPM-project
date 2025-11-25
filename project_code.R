@@ -63,12 +63,6 @@ genes.info.tumor <- BiocGenerics::as.data.frame(rowRanges(rna.data.tumor))
 genes.info.normal <- BiocGenerics::as.data.frame(rowRanges(rna.data.normal))
 all(na.omit(genes.info.normal) == na.omit(genes.info.tumor))
 
-
-# Saving the data
-# save(rna.query.normal, rna.query.tumor, rna.data.normal, rna.data.tumor, rna.expr.data.normal, rna.expr.data.tumor,
-#     genes.info.tumor, genes.info.normal, genes.info.tumor, genes.info.normal, file="initial-project-data.RData")
-
-
 # Loading and analyzing clinical data
 clinical.query <- GDCquery_clinic(project = proj, type = "clinical", save.csv = FALSE)
 table(clinical.query$ajcc_pathologic_stage)
@@ -84,5 +78,8 @@ View(clinical.query)
 dim(rna.expr.data.tumor)
 dim(rna.expr.data.normal)
 
+# Saving the data
+# save(rna.query.normal, rna.query.tumor, rna.data.normal, rna.data.tumor, rna.expr.data.normal, rna.expr.data.tumor,
+#     genes.info.tumor, genes.info.normal, genes.info.tumor, genes.info.normal, clinical.query, file="initial-project-data.RData")
 
 
