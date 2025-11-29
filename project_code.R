@@ -225,8 +225,7 @@ cat("it seems that loss of gene expression is a dominant feature of this bladder
 ##Save DEG Results
 write.csv(as.data.frame(degs_list), file = "DEGs_List.csv")
 
-# Subset the original data to keep ONLY the significant DEGs
-# (We use the strict list you created to keep the network size manageable)
+# Subset the original data to keep the significant DEGs :D
 network.tumor.data <- tumor.final[deg_names, ]
 network.normal.data <- normal.final[deg_names, ]
 
@@ -335,9 +334,9 @@ cat("In the normal tissue, 32 specific hubs were responsible for maintaining hea
 cat("On the contrary, 32 new hubs emerged exclusively in the tumor network. These genes, which were peripheral or dormant in healthy tissue, appear to have 'hijacked' the network to drive the pathological state of the cancer.")
 cat("Conclusion: Bladder Cancer is not just caused by individual genes changing, but by a complete restructuring of the gene communication network.")
 
-# Save results for discussion
-write.csv(data.frame(Gene=unique_tumor_hubs), "Hubs_Specific_to_Tumor.csv")
-write.csv(data.frame(Gene=unique_normal_hubs), "Hubs_Specific_to_Normal.csv")
+
+#write.csv(data.frame(Gene=unique_tumor_hubs), "Hubs_Specific_to_Tumor.csv") 
+#write.csv(data.frame(Gene=unique_normal_hubs), "Hubs_Specific_to_Normal.csv")
 
 # Print first few tumor-specific hubs to check
 print(unique_tumor_hubs) #these are the IDS but we want the Gene Symbols
@@ -359,7 +358,7 @@ gene_names <- getBM(
 gene_names <- gene_names[gene_names$hgnc_symbol != "", ] #filter empty names
 
 print(gene_names)
-cat("The names of the tumor genes are to be human readable are: ")
+cat("The names of the tumor genes are: ")
 print(gene_names$hgnc_symbol)
 
-write.csv(gene_names, "Tumor_Hub_Symbols.csv", row.names = FALSE) #save
+#write.csv(gene_names, "Tumor_Hub_Symbols.csv", row.names = FALSE) #save
