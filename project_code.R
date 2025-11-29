@@ -19,12 +19,13 @@ library(TCGAbiolinks)
 library(GenomicRanges)
 library(SummarizedExperiment)
 library(DT)
+library(biomaRt) #new from laura
 
 #### Downloading the data ####------------------------------------------------------------------------------
 
 # File directory
 # setwd("C:/Users/galax/OneDrive/Dokumente/University/Magistrale/DEPM/Project")
-setwd("C:/Users/lamor/OneDrive/Documents/LAURITA/Sapienza/DE")
+#setwd("C:/Users/lamor/OneDrive/Documents/LAURITA/Sapienza/DE")-->LAURA
 proj <- "TCGA-BLCA" # Bladder Urothelial Carcinoma
 dir.create(file.path(proj))
 
@@ -171,7 +172,7 @@ cat("I'm still worried that all those genes are a lot and we need to filter them
 
 # Project Guideline
 # 1. Adjusted P-value (padj) <= 0.05
-# 2. |Fold Change| >= 1.2
+# 2. |Fold Change| >= 5
 #    Note: DESeq2 outputs log2(FoldChange).
 #    log2(1.2) approx 0.263
 #    log2(1/1.2) approx -0.263
@@ -192,11 +193,11 @@ degs_list <- degs_list[order(degs_list$padj), ]
 cat("For thresholds: padj <= ", padj_threshold, " | |FC| >= ", fc_threshold_linear)
 cat("we, got ",  nrow(degs_list), "number of DEGs identified.")
 
-# Save the names of the DEGs for the next tasks (Co-expression networks)
-deg_names <- rownames(degs_list)
+# Save the names of the DEGs for the next tasks 
+deg_names <- rownames(degs_list) #this is for the next steps
+message("Here are the DEG names:", deg_names)
 
 #2.4 Visualization: Volcano Plot 
-
 
 volcano_data <- as.data.frame(res) #the results to a data frame for plotting
 volcano_data$diffexpressed <- "No"
@@ -221,6 +222,144 @@ ggplot(volcano_data, aes(x = log2FoldChange, y = -log10(padj), col = diffexpress
 cat("Downregulated (blue) seems denser and has more points than the upregulated")
 cat("it seems that loss of gene expression is a dominant feature of this bladder cancer dataset when looking at high-fold changes. Mainly, there are many genes being turned off.")
 
-##Save DEG Results ####
+##Save DEG Results
 write.csv(as.data.frame(degs_list), file = "DEGs_List.csv")
 
+# Subset the original data to keep ONLY the significant DEGs
+# (We use the strict list you created to keep the network size manageable)
+network.tumor.data <- tumor.final[deg_names, ]
+network.normal.data <- normal.final[deg_names, ]
+
+### 3. Co-expression networks -----------------------------------------------------------------------
+
+#3.1 Before staring, we transform the data using log2.
+tumor.log <- log2(network.tumor.data + 1) # Adding +1 avoids log(0) errors
+normal.log <- log2(network.normal.data + 1)
+
+#3.2 Correlation Matrices (Pearson correlation)
+# We use t() because cor() calculates correlation between columns, and our genes are rows.
+tumor.cor <- cor(t(tumor.log), method = "pearson")
+normal.cor <- cor(t(normal.log), method = "pearson")
+
+# 3.3 Build Binary Adjacency Matrices
+# "Binary adjacency matrix where a_ij=0 if |rho| < threshold" 
+
+# Define Correlation Threshold
+cor_thresh <- 0.75 #standar measure
+
+# Create Adjacency Matrices (1 if connected, 0 if not)
+# We use abs() because strong negative correlation is also a valid biological link.
+tumor.adj <- ifelse(abs(tumor.cor) > cor_thresh, 1, 0)
+normal.adj <- ifelse(abs(normal.cor) > cor_thresh, 1, 0)
+
+# Remove self-loops (a gene is always correlated 1.0 with itself, but that's not a network link)
+diag(tumor.adj) <- 0
+diag(normal.adj) <- 0
+
+
+cat("Tumor Network Density: ", round(mean(tumor.adj), 3))
+cat("Normal Network Density: ", round(mean(normal.adj), 3))
+
+
+
+# 3.4 Scale-Free Property and Degree ------------------------------------------
+
+# "Compute the degree index and check if the network is a scale free network" [cite: 32]
+
+# Calculate Degree (k) = Number of connections per gene
+k.tumor <- rowSums(tumor.adj)
+k.normal <- rowSums(normal.adj)
+
+# Function to Plot Degree Distribution (Log-Log Plot)
+# A straight line descending implies a Scale-Free Network (Power Law)
+plot_scale_free <- function(degrees, title) {
+  # Frequency table of degrees
+  deg_counts <- table(degrees)
+  
+  # X axis: Degree (k), Y axis: Probability P(k)
+  x <- as.numeric(names(deg_counts))
+  y <- as.numeric(deg_counts) / sum(deg_counts)
+  
+  # Remove degree 0 to avoid log(0) errors
+  valid <- x > 0
+  x <- x[valid]
+  y <- y[valid]
+  
+  # Plot
+  plot(log10(x), log10(y), pch = 19, col = "darkblue",
+       main = title,
+       xlab = "Log10 (Degree k)", 
+       ylab = "Log10 (P(k))")
+  
+  # Fit a linear model to check R-squared (goodness of fit)
+  fit <- lm(log10(y) ~ log10(x))
+  abline(fit, col = "red", lwd = 2)
+  
+  # Display R-squared on plot
+  r2 <- round(summary(fit)$r.squared, 3)
+  legend("topright", legend = paste("R2 =", r2), bty = "n")
+}
+
+# Generate Plots (Required for Report "Expected figures: Degree distribution" )
+par(mfrow = c(1, 2)) # Side by side
+plot_scale_free(k.tumor, "Tumor Network Degree Dist.")
+plot_scale_free(k.normal, "Normal Network Degree Dist.")
+par(mfrow = c(1, 1)) # Reset
+
+
+cat("The Tumor Network is a scale-free Network. We can see that the tumor network is organized hierarchically. Most genes have very few connections, but a few Hubs control everything. This structure is efficient but fragile if we target the hubs (with drugs).")
+cat("On the other hand, the Normal Network shows a cluster of points on the far right (high degree), and that breaks the pattern. So, the normal network is not scale-free under these parameters. It is much denser. In healthy tissue, gene regulation is often tighter and more redundant, leading to many genes having high connectivity, rather than just a few select hubs.")
+
+
+# 3.5 Hub Identification & Comparison
+
+# Calculate cutoff for top 5% (5% of the nodes with highest degree values)
+top_5_pct <- ceiling(length(deg_names) * 0.05)
+
+# sort genes by degree and pick top N
+hubs.tumor <- names(sort(k.tumor, decreasing = TRUE)[1:top_5_pct]) #descending order
+hubs.normal <- names(sort(k.normal, decreasing = TRUE)[1:top_5_pct])
+
+# Compare hubs sets related to the two condition.
+common_hubs <- intersect(hubs.tumor, hubs.normal)
+unique_tumor_hubs <- setdiff(hubs.tumor, hubs.normal)
+unique_normal_hubs <- setdiff(hubs.normal, hubs.tumor)
+
+cat("Total Hubs per network (top 5%): ", top_5_pct)
+cat("Shared Hubs: ", length(common_hubs))
+cat("Tumor-Specific Hubs: ", length(unique_tumor_hubs))
+cat("Normal-Specific Hubs: ", length(unique_normal_hubs))
+ 
+cat("There is a huge 'rewiring' of the network. Only 4 out of 36 'Hub' genes remained central in both healthy and cancer tissues.")
+cat("In the normal tissue, 32 specific hubs were responsible for maintaining healthy function (homeostasis). In the cancer tissue, these genes lost their central connectivity, suggesting a collapse of the normal regulatory systems.")
+cat("On the contrary, 32 new hubs emerged exclusively in the tumor network. These genes, which were peripheral or dormant in healthy tissue, appear to have 'hijacked' the network to drive the pathological state of the cancer.")
+cat("Conclusion: Bladder Cancer is not just caused by individual genes changing, but by a complete restructuring of the gene communication network.")
+
+# Save results for discussion
+write.csv(data.frame(Gene=unique_tumor_hubs), "Hubs_Specific_to_Tumor.csv")
+write.csv(data.frame(Gene=unique_normal_hubs), "Hubs_Specific_to_Normal.csv")
+
+# Print first few tumor-specific hubs to check
+print(unique_tumor_hubs) #these are the IDS but we want the Gene Symbols
+
+#3.6. IDs to gene symbols 
+
+clean_ids <- gsub("\\..*", "", unique_tumor_hubs)
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl") # connect to the Ensembl Database
+
+#Fetch the Gene Symbols
+#ask for the ID and the "hgnc_symbol" (the human readable name)
+gene_names <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  filters = "ensembl_gene_id",
+  values = clean_ids,
+  mart = mart
+)
+
+gene_names <- gene_names[gene_names$hgnc_symbol != "", ] #filter empty names
+
+print(gene_names)
+cat("The names of the tumor genes are to be human readable are: ")
+print(gene_names$hgnc_symbol)
+
+write.csv(gene_names, "Tumor_Hub_Symbols.csv", row.names = FALSE) #save
