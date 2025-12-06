@@ -81,8 +81,8 @@ dim(rna.expr.data.tumor)
 dim(rna.expr.data.normal)
 
 # Saving the data
-save(rna.query.normal, rna.query.tumor, rna.data.normal, rna.data.tumor, rna.expr.data.normal, rna.expr.data.tumor,
-genes.info.tumor, genes.info.normal, genes.info.tumor, genes.info.normal, clinical.query, file="initial-project-data.RData")
+#save(rna.query.normal, rna.query.tumor, rna.data.normal, rna.data.tumor, rna.expr.data.normal, rna.expr.data.tumor,
+#genes.info.tumor, genes.info.normal, genes.info.tumor, genes.info.normal, clinical.query, file="initial-project-data.RData")
 
 
 #### 1. Pre-process the data  --------------------------------------------------------------------------------------
@@ -362,3 +362,190 @@ cat("The names of the tumor genes are: ")
 print(gene_names$hgnc_symbol)
 
 #write.csv(gene_names, "Tumor_Hub_Symbols.csv", row.names = FALSE) #save
+
+
+
+#### 4. DIFFERENTIAL CO-EXPRESSION NETWORK -----------------------------------------------
+
+
+# 4.1 Computing Fisher's Z-transformation and Z-scores
+
+# The goal is to find gene pairs whose correlation changes significantly 
+# between tumor and normal conditions
+
+# Fisher's Z-transformation: 0.5 * ln((1+rho)/(1-rho))   (rho: Pearson correlation)
+# This make correlations approximately normally distributed
+
+fisher_z <- function(rho) {
+  return(0.5*log((1+rho)/(1-rho)))
+}
+
+# Transform both correlation matrices
+z.tumor <- fisher_z(tumor.cor)
+z.normal <- fisher_z(normal.cor)
+
+# Handle extreme cases (when correlation is 1 or -1)
+z.tumor[is.infinite(z.tumor)] <- NA
+z.normal[is.infinite(z.normal)] <- NA
+
+# For each gene pair compute how much the correlation changed
+# Z = (Z_tumor - Z_normal) / sqrt(1/(n_tumor-3) + 1/(n_normal-3))
+
+n_tumor <- ncol(tumor.log)  # number of tumor samples
+n_normal <- ncol(normal.log)  # number of normal samples
+
+# Calculate differential Z-score matrix
+z_diff <- (z.tumor - z.normal) / sqrt(1/(n_tumor-3) + 1/(n_normal-3))
+z_diff[is.na(z_diff)] <- 0 # Replace NAs with 0 (no significant change)
+cat("Range of Z_diff scores:", round(min(z_diff), 2), "to", round(max(z_diff), 2), "\n")
+
+# 4.2 Build binary differential adjacency matrix
+
+z_threshold <- 3 # from the assignment, |Z_diff|>3 means that correlation change is statistically significant
+
+# Create adjacency matrix: 1 if connection changed significantly, 0 otherwise
+diff.adj <- ifelse(abs(z_diff) > z_threshold, 1, 0)
+diag(diff.adj) <- 0 # Remove self-loops
+
+cat("Threshold: |Z_diff|>", z_threshold, "\n")
+cat("Total possible edges:", length(deg_names) * (length(deg_names)-1)/2, "\n")
+cat("Significant differential edges:", sum(diff.adj)/2, "\n")  # divide by 2 because matrix is symmetric
+cat("Network Density:", round(mean(diff.adj), 4), "\n\n")
+
+# 4.3 Degree distribution and scale-free analysis
+
+k.diff <- rowSums(diff.adj) # Calculate degree for each gene in the differential network
+
+# Printing the statistics
+cat("Degree Distribution Statistics\n")
+cat("Min degree:", min(k.diff),"    Max degree:", max(k.diff), "\n")
+cat("Mean degree:", round(mean(k.diff),2), "     Median degree:", median(k.diff), "\n")
+cat("Genes with degree 0:", sum(k.diff==0), "\n\n")
+
+# Plot degree distribution (log-log plot for scale-free assessment)
+plot_scale_free_diff <- function(degrees, title) {
+  
+  # Create frequency table
+  deg_counts <- table(degrees)
+  
+  # Prepare data
+  x <- as.numeric(names(deg_counts))
+  y <- as.numeric(deg_counts)/sum(deg_counts)
+  
+  # remove degree 0 to avoid log(0)
+  valid <- x>0
+  x<-x[valid]
+  y<-y[valid]
+  
+  # check if we have enough data points
+  if(length(x)<3) {
+    plot(1, 1, type="n", main=title, xlab="Log10 (Degree k)", ylab="Log10 (P(k))")
+    text(1, 1, "Insufficient data for scale-free analysis", col="red")
+    return(NULL)
+  }
+  
+  # log-log plot
+  plot(log10(x), log10(y), pch=19, col="purple", main=title,
+       xlab="Log10 (Degree k)", ylab="Log10 (P(k))", cex=1.5)
+  
+  # Fit linear model
+  fit <- lm(log10(y) ~ log10(x))
+  abline(fit, col="red", lwd=2)
+  
+  # Display statistics
+  r2 <- round(summary(fit)$r.squared, 3)
+  slope <- round(coef(fit)[2], 3)
+  
+  legend("topright", legend=c(paste("R^2 =", r2), paste("Slope =", slope)), bty="n", cex=1.1)
+  
+  return(list(r2=r2, slope=slope))
+}
+
+# Generate the plot
+par(mfrow=c(1, 1))
+diff_stats <- plot_scale_free_diff(k.diff, "Differential Network Degree Distribution")
+
+# Interpretation
+if(!is.null(diff_stats)) {
+  if(diff_stats$r2 > 0.8) {
+    cat("The differential network appears to be scale-free (R^2>0.8)\n")
+    # this indicates a hierarchical organization with hub genes
+  } else {
+    cat("The differential network does NOT follow a clear scale-free topology (R^2<0.8)\n")
+    # this may indicate a more distributed network structure
+  }
+}
+
+# 4.4 Hub Identification in Differential Network
+
+# Calculate top 5% threshold
+top_5_pct_diff <- ceiling(length(deg_names)*0.05)
+# Identify hubs (top 5% by degree)
+hubs.diff <- names(sort(k.diff, decreasing=TRUE)[1:top_5_pct_diff])
+
+# Print top hubs
+cat("Top 5% threshold:", top_5_pct_diff, "genes\n")
+
+# Display top 10 hubs with their degrees
+cat("Top 10 Differential Hubs:\n")
+top_diff_degrees <- sort(k.diff, decreasing = TRUE)[1:10]
+print(data.frame(Gene=names(top_diff_degrees), Degree=as.numeric(top_diff_degrees)))
+
+# 4.5 Comparison with Task 3 Hubs
+
+# Compare with tumor hubs from Task 3
+overlap_tumor <- intersect(hubs.diff, hubs.tumor)
+unique_to_diff <- setdiff(hubs.diff, hubs.tumor)
+unique_to_tumor <- setdiff(hubs.tumor, hubs.diff)
+
+cat("Shared hubs (differential and tumor-specific):", length(overlap_tumor), "\n")
+cat("Unique to differential network:", length(unique_to_diff), "\n")
+cat("Unique to tumor network (Task 3):", length(unique_to_tumor), "\n\n")
+
+# Compare with normal hubs from Task 3
+overlap_normal <- intersect(hubs.diff, hubs.normal)
+unique_to_normal <- setdiff(hubs.normal, hubs.diff)
+
+cat("Shared hubs (differential and normal-specific):", length(overlap_normal), "\n")
+cat("Unique to normal network (Task 3):", length(unique_to_normal), "\n\n")
+
+# Compare with common hubs from Task 3
+overlap_common <- intersect(hubs.diff, common_hubs)
+
+cat("Shared hubs (differential and common hubs of both networks):", length(overlap_common), "\n\n")
+
+# Create summary visualization
+cat("SUMMARY TABLE\n")
+comparison_summary <- data.frame(
+  Hub_Set = c("Tumor-Specific (Task 3)", "Normal-Specific (Task 3)", "Common (Task 3)", "Differential (Task 4)"),
+  Count = c(length(hubs.tumor), length(hubs.normal), length(common_hubs), length(hubs.diff)),
+  Overlap_with_Diff = c(length(overlap_tumor), length(overlap_normal), length(overlap_common), NA))
+print(comparison_summary)
+
+# 4.6 Convert Differential Hub IDs to Gene Symbols
+
+# Clean Ensembl IDs (remove version numbers)
+clean_diff_ids <- gsub("\\..*", "", hubs.diff)
+
+# Fetch gene symbols using biomaRt
+gene_names_diff <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  filters = "ensembl_gene_id",
+  values = clean_diff_ids,
+  mart = mart
+)
+
+# Filter out empty symbols
+gene_names_diff <- gene_names_diff[gene_names_diff$hgnc_symbol != "", ]
+
+cat("Differential Hub Gene Symbols\n")
+print(gene_names_diff[, c("ensembl_gene_id", "hgnc_symbol")])
+cat("\nGene symbols:", paste(gene_names_diff$hgnc_symbol, collapse = ", "), "\n")
+
+# Save results
+write.csv(gene_names_diff, "Differential_Hub_Symbols.csv", row.names=FALSE)
+write.csv(data.frame(Gene=hubs.diff, Degree=k.diff[hubs.diff]), 
+          "Hubs_Differential_Network.csv", row.names=FALSE)
+
+# Separate: Enrichr analysis
+
