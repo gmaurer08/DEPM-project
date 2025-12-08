@@ -20,12 +20,14 @@ library(GenomicRanges)
 library(SummarizedExperiment)
 library(DT)
 library(biomaRt) #new from laura
+library(network) #new
+
 
 #### Downloading the data ####------------------------------------------------------------------------------
 
 # File directory
 # setwd("C:/Users/galax/OneDrive/Dokumente/University/Magistrale/DEPM/Project")
-#setwd("C:/Users/lamor/OneDrive/Documents/LAURITA/Sapienza/DE")-->LAURA
+setwd("C:/Users/lamor/OneDrive/Documents/LAURITA/Sapienza/DE")
 proj <- "TCGA-BLCA" # Bladder Urothelial Carcinoma
 dir.create(file.path(proj))
 
@@ -81,8 +83,8 @@ dim(rna.expr.data.tumor)
 dim(rna.expr.data.normal)
 
 # Saving the data
-#save(rna.query.normal, rna.query.tumor, rna.data.normal, rna.data.tumor, rna.expr.data.normal, rna.expr.data.tumor,
-#genes.info.tumor, genes.info.normal, genes.info.tumor, genes.info.normal, clinical.query, file="initial-project-data.RData")
+save(rna.query.normal, rna.query.tumor, rna.data.normal, rna.data.tumor, rna.expr.data.normal, rna.expr.data.tumor,
+genes.info.tumor, genes.info.normal, genes.info.tumor, genes.info.normal, clinical.query, file="initial-project-data.RData")
 
 
 #### 1. Pre-process the data  --------------------------------------------------------------------------------------
@@ -166,7 +168,6 @@ cat("LFC > 0 (up) shows that 3,775 genes have a positive Log Fold Change. So,the
 cat("LFC < 0 (down) shows that 3,242 genes have a negative Log Fold Change. So,those genes are less active (silenced or suppressed) in the Tumor samples compared to normal tissue.")
 cat("outliers [1] is 0, So, the data is clean and no single patient is messing up the results, ouliers[2] is also 0, which makes sense because we deleted the rows (genes) with 0")
 
-cat("I'm still worried that all those genes are a lot and we need to filter them more - Laura")
 
 # 2.3. Filtering DEGs (Applying Thresholds)
 
@@ -177,9 +178,9 @@ cat("I'm still worried that all those genes are a lot and we need to filter them
 #    log2(1.2) approx 0.263
 #    log2(1/1.2) approx -0.263
 
-fc_threshold_linear <- 5 #iterating it to get hundreds of genes and not thousands
+fc_threshold_linear <- 1.4 #iterating it to get hundreds of genes and not thousands
 log2_fc_threshold <- log2(fc_threshold_linear)
-padj_threshold <- 0.05
+padj_threshold <- 1e-8
 
 # Create logical vector for significance
 is_significant <- (res$padj <= padj_threshold & !is.na(res$padj)) & (abs(res$log2FoldChange) >= log2_fc_threshold)
@@ -219,8 +220,9 @@ ggplot(volcano_data, aes(x = log2FoldChange, y = -log10(padj), col = diffexpress
        y = "-log10 Adjusted P-value") +
   theme(legend.title = element_blank())
 
-cat("Downregulated (blue) seems denser and has more points than the upregulated")
-cat("it seems that loss of gene expression is a dominant feature of this bladder cancer dataset when looking at high-fold changes. Mainly, there are many genes being turned off.")
+
+cat("Downregulated seems denser and has more points than the upregulated")
+cat("A loss of gene expression (genes being silenced or suppressed) is a dominant and characteristic feature of this specific cancer subtype compared to normal tissue, since the tails are not symetric")
 
 ##Save DEG Results
 write.csv(as.data.frame(degs_list), file = "DEGs_List.csv")
@@ -310,7 +312,7 @@ cat("The Tumor Network is a scale-free Network. We can see that the tumor networ
 cat("On the other hand, the Normal Network shows a cluster of points on the far right (high degree), and that breaks the pattern. So, the normal network is not scale-free under these parameters. It is much denser. In healthy tissue, gene regulation is often tighter and more redundant, leading to many genes having high connectivity, rather than just a few select hubs.")
 
 
-# 3.5 Hub Identification & Comparison
+# 3.5 Hub Identification & Comparison------------------------
 
 # Calculate cutoff for top 5% (5% of the nodes with highest degree values)
 top_5_pct <- ceiling(length(deg_names) * 0.05)
@@ -329,9 +331,9 @@ cat("Shared Hubs: ", length(common_hubs))
 cat("Tumor-Specific Hubs: ", length(unique_tumor_hubs))
 cat("Normal-Specific Hubs: ", length(unique_normal_hubs))
  
-cat("There is a huge 'rewiring' of the network. Only 4 out of 36 'Hub' genes remained central in both healthy and cancer tissues.")
-cat("In the normal tissue, 32 specific hubs were responsible for maintaining healthy function (homeostasis). In the cancer tissue, these genes lost their central connectivity, suggesting a collapse of the normal regulatory systems.")
-cat("On the contrary, 32 new hubs emerged exclusively in the tumor network. These genes, which were peripheral or dormant in healthy tissue, appear to have 'hijacked' the network to drive the pathological state of the cancer.")
+cat("There is a huge 'rewiring' of the network. Only 4 out of 34 'Hub' genes remained central in both healthy and cancer tissues.")
+cat("In the normal tissue, 30 specific hubs were responsible for maintaining healthy function (homeostasis). In the cancer tissue, these genes lost their central connectivity, suggesting a collapse of the normal regulatory systems.")
+cat("On the contrary, 30 new hubs emerged exclusively in the tumor network. These genes, which were peripheral or dormant in healthy tissue, appear to have 'hijacked' the network to drive the pathological state of the cancer.")
 cat("Conclusion: Bladder Cancer is not just caused by individual genes changing, but by a complete restructuring of the gene communication network.")
 
 
@@ -341,7 +343,7 @@ cat("Conclusion: Bladder Cancer is not just caused by individual genes changing,
 # Print first few tumor-specific hubs to check
 print(unique_tumor_hubs) #these are the IDS but we want the Gene Symbols
 
-#3.6. IDs to gene symbols 
+#3.6. IDs to gene symbols ---------------------------
 
 clean_ids <- gsub("\\..*", "", unique_tumor_hubs)
 mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl") # connect to the Ensembl Database
@@ -362,6 +364,119 @@ cat("The names of the tumor genes are: ")
 print(gene_names$hgnc_symbol)
 
 #write.csv(gene_names, "Tumor_Hub_Symbols.csv", row.names = FALSE) #save
+
+# 3.7 Tumor Network view ----------------------------
+
+# Create the 'network' object 'tumor.adj' is the binary adjacency matrix from Task 3.3
+net.tumor <- network(tumor.adj, 
+                     matrix.type = "adjacency", 
+                     directed = FALSE)
+
+# 2. attributes for plotting 
+net.tumor %v% "type" = ifelse(network.vertex.names(net.tumor) %in% hubs.tumor, "Hub", "Non-Hub") # type (Hub/Non-Hub) using the hubs list from point 3.5
+net.tumor %v% "color" = ifelse(net.tumor %v% "type" == "Hub", "tomato", "blue") #color based on type
+
+# Tumor network plot
+tumor_network_plot <- ggnet2(net.tumor, 
+                             color = "type",                
+                             palette = c("Hub" = "tomato", "Non-Hub" = "blue"),
+                             size = "degree",                 
+                             size.cut = 5,                    
+                             node.alpha = 0.8,
+                             edge.size = 0.1,                 
+                             edge.alpha = 0.4,
+                             mode = "fruchtermanreingold",    
+                             legend.size = 10) +
+  guides(size = "none") +
+  labs(title = "Tumor co-expression Network (DEGs)",
+       subtitle = paste("Hubs (5%) highlighted. Correlation threshold: |rho| >", cor_thresh)) +
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5))
+
+# Display and Save the plot
+print(tumor_network_plot)
+ggsave("Tumor_Coexpression_Network.png", plot = tumor_network_plot, width = 8, height = 8, dpi = 300)
+
+
+# 3.8 Normal network view --------------------
+
+# network' object from the binary adjacency matrix from Task 3.3
+net.normal <- network(normal.adj, 
+                      matrix.type = "adjacency", 
+                      directed = FALSE)
+
+#assign attributes
+net.normal %v% "type" = ifelse(network.vertex.names(net.normal) %in% hubs.normal, "Hub", "Non-Hub") # 'normal.adj' is the binary adjacency matrix from point 3.3
+net.normal %v% "color" = ifelse(net.normal %v% "type" == "Hub", "tomato", "green") #  color based on type
+
+# plot the normal network
+normal_network_plot <- ggnet2(net.tumor, 
+                             color = "type",                 
+                             palette = c("Hub" = "tomato", "Non-Hub" = "green"), 
+                             size = "degree",                 
+                             size.cut = 5,                    
+                             node.alpha = 0.8,
+                             edge.size = 0.1,                 
+                             edge.alpha = 0.4,
+                             mode = "fruchtermanreingold",    
+                             legend.size = 10) +
+  guides(size = "none") +
+  labs(title = "Normal Co-expression Network (DEGs)",
+       subtitle = paste("Hubs (5%) highlighted. Correlation threshold: |rho| >", cor_thresh)) +
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5))
+
+# Display and Save the plot
+print(normal_network_plot)
+ggsave("normal_Coexpression_Network.png", plot = normal_network_plot, width = 8, height = 8, dpi = 300)
+
+
+# 3.9 Plotting the Hub Subnetwork (Tumor) -------------------------------------
+
+# We used these variables: tumor.adj (binary matrix), hubs.tumor (hub names), deg_names (all gene names)
+
+# rows/columns corresponding to Hubs
+hubs.tumor.indices <- which(deg_names %in% hubs.tumor)
+hubs.tumor.names <- deg_names[hubs.tumor.indices]
+
+# neighbors (nodes connected to any hub in the binary matrix)
+# rowSums checks which columns in the tumor.adj matrix have a connection (a '1') 
+# when restricted to the hub rows.
+is_neighbor <- colSums(tumor.adj[hubs.tumor.indices, ]) > 0 
+neighbor.names <- deg_names[is_neighbor]
+
+# final Subnetwork definition: Hubs + Neighbors
+subnet.nodes <- unique(c(hubs.tumor.names, neighbor.names))
+
+# Sub-Adjacency Matrix
+hub.tumor.adj <- tumor.adj[subnet.nodes, subnet.nodes]
+
+#Sub-Network Object
+net.hub.tumor <- network(hub.tumor.adj, 
+                         matrix.type="adjacency", 
+                         directed = FALSE)
+
+#assign attributes
+net.hub.tumor %v% "type" = ifelse(network.vertex.names(net.hub.tumor) %in% hubs.tumor.names, "Hub", "Neighbor")
+net.hub.tumor %v% "color" = ifelse(net.hub.tumor %v% "type" == "Hub", "tomato", "blue")
+
+#Subnetwork plot
+hub_subnetwork_plot <- ggnet2(net.hub.tumor,  
+                              color = "type",                 
+                              palette = c("Hub" = "tomato", "Neighbor" = "blue"),
+                              size = "degree",                 
+                              size.cut = 5,
+                              alpha = 0.9,
+                              edge.color = "grey", 
+                              edge.alpha = 0.6,
+                              edge.size = 0.15, 
+                              label.color = "black", 
+                              label.size = 2.5) +
+  guides(size = "none") +
+  labs(title = "Tumor Hub Subnetwork and First Neighbors", 
+       subtitle = paste("Showing connectivity of", length(hubs.tumor.names), "Tumor-specific Hubs"))
+
+print(hub_subnetwork_plot)
+ggsave("Tumor_Hub_Subnetwork.png", plot = hub_subnetwork_plot, width = 8, height = 8, dpi = 300)
+
 
 
 
@@ -548,4 +663,61 @@ write.csv(data.frame(Gene=hubs.diff, Degree=k.diff[hubs.diff]),
           "Hubs_Differential_Network.csv", row.names=FALSE)
 
 # Separate: Enrichr analysis
+
+
+
+
+#Optional tasks ---------------------------
+
+#----------------------------------------------
+#Centrality Comparison (Degree vs. Betweenness)
+#----------------------------------------------
+
+# Betweenness Centrality  
+b.tumor <- sna::betweenness(net.tumor, gmode = "graph")  # how often a node lies on the shortest path between two other nodes.
+print(b.tumor)
+names(b.tumor) <- network::network.vertex.names(net.tumor) 
+
+# Betweenness (Top 5%)
+top_5_pct <- ceiling(network::network.size(net.tumor) * 0.05) 
+hubs.betweenness <- names(sort(b.tumor, decreasing = TRUE)[1:top_5_pct])
+print(hubs.betweenness)
+
+# Overlap with Degree Hubs (hubs.tumor)
+common_hubs_ci <- intersect(hubs.tumor, hubs.betweenness)
+
+message(paste("Total nodes:", network::network.size(net.tumor)))
+message(paste("Total Hubs per method:", top_5_pct))
+message(paste("Overlap between Degree Hubs and Betweenness Hubs:", length(common_hubs_ci)))
+message(paste("Percentage Overlap:", round(length(common_hubs_ci) / top_5_pct * 100, 1), "%"))
+
+# Print the names of the most critical overlapping hubs
+print(paste("Overlapping Hubs:", common_hubs_ci))
+
+cat("The 12 genes identified in the overlap are the most critical nodes in the Tumor Network. 
+They simultaneously possess: high Connectivity (degree) where are the center of their local gene
+expression clusters, and global influence (betweenness) where lie on the shortest communication
+paths across the entire network.")
+cat("The other 22 hubs, mean that they do not overlap and have different focus. However, to build a drug
+for the cancer, there should be focus on the overlap genes (12) + the other 11 betweenness-only to block
+communication and coordination between different cancer pathways.")
+
+#get the symbols
+clean_ids <- gsub("\\..*", "", common_hubs_ci)
+mart <- useMart("ensembl", dataset = "hsapiens_gene_ensembl") # connect to the Ensembl Database
+
+#Fetch the Gene Symbols
+#ask for the ID and the "hgnc_symbol" (the human readable name)
+gene_names_comparisson <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  filters = "ensembl_gene_id",
+  values = clean_ids,
+  mart = mart
+)
+
+gene_names_comparisson <- gene_names_comparisson[gene_names_comparisson$hgnc_symbol != "", ] #filter empty names
+
+print(gene_names_comparisson)
+cat("The names of the critical genes are: ")
+print(gene_names_comparisson$hgnc_symbol)
 
