@@ -26,7 +26,7 @@ library(network) #new
 #### Downloading the data ####------------------------------------------------------------------------------
 
 # File directory
-# setwd("C:/Users/galax/OneDrive/Dokumente/University/Magistrale/DEPM/Project")
+#setwd("C:/Users/galax/OneDrive/Dokumente/University/Magistrale/DEPM/Project")
 setwd("C:/Users/lamor/OneDrive/Documents/LAURITA/Sapienza/DE")
 proj <- "TCGA-BLCA" # Bladder Urothelial Carcinoma
 dir.create(file.path(proj))
@@ -83,8 +83,8 @@ dim(rna.expr.data.tumor)
 dim(rna.expr.data.normal)
 
 # Saving the data
-save(rna.query.normal, rna.query.tumor, rna.data.normal, rna.data.tumor, rna.expr.data.normal, rna.expr.data.tumor,
-genes.info.tumor, genes.info.normal, genes.info.tumor, genes.info.normal, clinical.query, file="initial-project-data.RData")
+#save(rna.query.normal, rna.query.tumor, rna.data.normal, rna.data.tumor, rna.expr.data.normal, rna.expr.data.tumor,
+#genes.info.tumor, genes.info.normal, genes.info.tumor, genes.info.normal, clinical.query, file="initial-project-data.RData")
 
 
 #### 1. Pre-process the data  --------------------------------------------------------------------------------------
@@ -720,4 +720,195 @@ gene_names_comparisson <- gene_names_comparisson[gene_names_comparisson$hgnc_sym
 print(gene_names_comparisson)
 cat("The names of the critical genes are: ")
 print(gene_names_comparisson$hgnc_symbol)
+
+
+#---------------------------------------------------
+# DIFFERENTIAL CO-EXPRESSED NETWORK - ANALYSIS
+# BINARY + SIGNED DIFFERENTIAL SUBNETWORKS (POS/NEG)
+#---------------------------------------------------
+
+# Build signed adjacency matrices
+# positive differential edges: z_diff > z_threshold  (gains of correlation in tumor vs normal)
+pos_diff.adj <- ifelse(z_diff>z_threshold, 1, 0)
+diag(pos_diff.adj) <- 0
+
+# negative differential edges: z_diff < -z_threshold (loss or reversed correlation in tumor vs normal)
+neg_diff.adj <- ifelse(z_diff < -z_threshold, 1, 0)
+diag(neg_diff.adj) <- 0
+
+cat("Positive differential edges (count, directed pairwise):", sum(pos_diff.adj)/2, "\n")
+cat("Negative differential edges (count, directed pairwise):", sum(neg_diff.adj)/2, "\n\n")
+
+# Positive and negative degrees per gene
+pos_degree <- rowSums(pos_diff.adj)
+neg_degree <- rowSums(neg_diff.adj)
+
+deg_df <- data.frame(
+  Ensembl_with_version = deg_names,
+  Ensembl = gsub("\\..*","",deg_names),
+  PosDegree = pos_degree,
+  NegDegree = neg_degree,
+  TotalDiffDegree = pos_degree+neg_degree,
+  stringsAsFactors = FALSE
+)
+
+# save degree table
+write.csv(deg_df, "Differential_PosNeg_Degrees_raw.csv", row.names = FALSE)
+
+# Identify hubs separately in positive vs negative networks
+topN <- top_5_pct_diff # top 5% found earlier
+
+# handle cases with fewer unique non-zero degrees than topN
+nonzero_pos <- sum(pos_degree>0)
+nonzero_neg <- sum(neg_degree>0)
+
+topN_pos <- min(topN, nonzero_pos)
+topN_neg <- min(topN, nonzero_neg)
+
+top_pos_hubs <- names(sort(pos_degree, decreasing=TRUE)[1:topN_pos])
+top_neg_hubs <- names(sort(neg_degree, decreasing=TRUE)[1:topN_neg])
+
+cat("Top positive hubs (#):", length(top_pos_hubs), "\n")
+cat("Top negative hubs (#):", length(top_neg_hubs), "\n\n")
+
+# Save lists
+write.csv(data.frame(Ensembl_with_version=top_pos_hubs, PosDegree=pos_degree[top_pos_hubs]), "Top_Positive_Hubs.csv", row.names=FALSE)
+write.csv(data.frame(Ensembl_with_version=top_neg_hubs, NegDegree=neg_degree[top_neg_hubs]), "Top_Negative_Hubs.csv", row.names = FALSE)
+
+# Merge and annotate hubs with gene symbols (biomaRt)
+# Prepare list of unique Ensembl ids to query
+hubs_all <- unique(c(top_pos_hubs, top_neg_hubs))
+hubs_all_clean <- gsub("\\..*", "", hubs_all)
+
+# Query biomaRt (re-use existing 'mart' connection)
+if(!exists("mart")) {
+  mart <- useMart("ensembl", dataset="hsapiens_gene_ensembl")
+}
+
+hub_symbols <- getBM(
+  attributes = c("ensembl_gene_id", "hgnc_symbol", "description"),
+  filters = "ensembl_gene_id",
+  values = hubs_all_clean,
+  mart = mart
+)
+
+# Merge back to produce annotated hub tables
+# create mapping (may be fewer than hubs if some have no HGNC symbol)
+map_df <- data.frame(Ensembl = hub_symbols$ensembl_gene_id,
+                     HGNC = hub_symbols$hgnc_symbol,
+                     Description = hub_symbols$description,
+                     stringsAsFactors = FALSE)
+
+# attach to positive hubs
+pos_hubs_df <- data.frame(
+  Ensembl_with_version = top_pos_hubs,
+  Ensembl=gsub("\\..*", "", top_pos_hubs),
+  PosDegree=pos_degree[top_pos_hubs],
+  stringsAsFactors=FALSE
+)
+pos_hubs_df <- merge(pos_hubs_df, map_df, by="Ensembl", all.x=TRUE)
+
+# attach to negative hubs
+neg_hubs_df <- data.frame(
+  Ensembl_with_version=top_neg_hubs,
+  Ensembl=gsub("\\..*", "", top_neg_hubs),
+  NegDegree=neg_degree[top_neg_hubs],
+  stringsAsFactors=FALSE
+)
+neg_hubs_df <- merge(neg_hubs_df, map_df, by="Ensembl", all.x=TRUE)
+
+# Save annotation files
+write.csv(pos_hubs_df, "Top_Positive_Hubs_annotated.csv", row.names=FALSE)
+write.csv(neg_hubs_df, "Top_Negative_Hubs_annotated.csv", row.names=FALSE)
+
+# Also save combined hub summary
+hub_summary <- merge(deg_df, map_df, by.x = "Ensembl", by.y = "Ensembl", all.x=TRUE)
+hub_summary <- hub_summary[order(-hub_summary$TotalDiffDegree), ]
+write.csv(hub_summary, "Differential_Hub_Summary_annotated.csv", row.names=FALSE)
+
+# Build and plot hub subnetworks (separate for positive and negative)
+# Helper function: create subnetwork for hubs + first neighbours and plot
+plot_hub_subnet <- function(adj_mat, hub_list, deg_names, filename_prefix,
+                            color_palette = c("Hub"="tomato","Neighbor"="grey")) {
+  
+  # restrict to nodes that are either hubs or neighbors of hubs (first neighbors)
+  hub_indices <- which(deg_names %in% hub_list)
+  if (length(hub_indices) == 0) {
+    message("No hubs found for ", filename_prefix)
+    return(NULL)
+  }
+  
+  # neighbors of these hubs
+  is_neighbor <- colSums(adj_mat[hub_indices, , drop = FALSE]) > 0
+  nodes_keep <- unique(c(which(deg_names %in% hub_list), which(is_neighbor)))
+  nodes_names <- deg_names[nodes_keep]
+  
+  # build adjacency
+  sub_adj <- adj_mat[nodes_names, nodes_names, drop = FALSE]
+  
+  # build network object
+  net_sub <- network(sub_adj, matrix.type = "adjacency", directed = FALSE)
+  
+  # assign attributes
+  net_sub %v% "type" <- ifelse(
+    network.vertex.names(net_sub) %in% hub_list, 
+    "Hub", 
+    "Neighbor"
+  )
+  net_sub %v% "display_name" <- network.vertex.names(net_sub)
+  
+  sub_deg <- degree(net_sub)
+  
+  # Bigger nodes for hubs, tiny nodes for neighbors
+  node_sizes <- ifelse(net_sub %v% "type" == "Hub", sub_deg, 0.05)
+  
+  net_sub %v% "size" <- node_sizes
+  
+  # plotting
+  p <- ggnet2(net_sub,
+              color = "type",
+              color.palette = color_palette,
+              size = "size",
+              size.cut = 4,
+              #label = TRUE,
+              #label.size = 3,
+              edge.size = 0.2,
+              edge.alpha = 0.4,
+              mode = "fruchtermanreingold") +
+    labs(
+      title = paste0(filename_prefix, " (Hubs + 1st neighbors)"),
+      subtitle = paste0("Nodes: ", network::network.size(net_sub),
+                        " | Hubs: ", length(hub_list))
+    )
+  
+  # print + save
+  print(p)
+  ggsave(paste0(filename_prefix, ".png"), plot=p, width=8, height=8, dpi=300)
+  
+  return(list(net=net_sub, plot=p))
+}
+
+# Call plotting function
+pos_plot_info <- plot_hub_subnet(pos_diff.adj,top_pos_hubs,deg_names,"Positive_Diff_Hub_Subnetwork")
+neg_plot_info <- plot_hub_subnet(neg_diff.adj,top_neg_hubs,deg_names,"Negative_Diff_Hub_Subnetwork",color_palette = c("Hub"="steelblue","Neighbor"="grey"))
+
+# Simple overlap and combined-ranking
+# Genes that are hubs for positive vs negative (disjoint or overlapping)
+overlap_pos_neg <- intersect(top_pos_hubs, top_neg_hubs)
+
+cat("Overlap between positive-hubs and negative-hubs:", length(overlap_pos_neg), "\n")
+if(length(overlap_pos_neg)>0) {
+  print(overlap_pos_neg)
+}
+
+# Combined ranking by difference of pos vs neg degree (useful to find polarizing genes)
+deg_df$PosRank <- rank(-deg_df$PosDegree, ties.method = "min")
+deg_df$NegRank <- rank(-deg_df$NegDegree, ties.method = "min")
+deg_df$PolarScore <- deg_df$PosDegree - deg_df$NegDegree  # positive: more gained pos links; negative: more lost/neg links
+
+combined_ranking <- deg_df[order(-abs(deg_df$PolarScore), -deg_df$TotalDiffDegree), ]
+write.csv(combined_ranking, "Differential_Hub_CombinedRanking.csv", row.names=FALSE)
+
+
+
 
