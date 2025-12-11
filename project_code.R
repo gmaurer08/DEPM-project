@@ -21,6 +21,9 @@ library(SummarizedExperiment)
 library(DT)
 library(biomaRt) #new from laura
 library(network) #new
+library(mclust) #5C
+library(SNFtool) #5C
+library(igraph) #5A
 
 
 #### Downloading the data ####------------------------------------------------------------------------------
@@ -665,7 +668,322 @@ write.csv(data.frame(Gene=hubs.diff, Degree=k.diff[hubs.diff]),
 # Separate: Enrichr analysis
 
 
+#### 5.A PATIENT SIMILARITY NETWORK (PSN)  -----------------------------------------------
 
+## From section 3 we already have the log-transformed genes x samples matrix
+## tumor data: tumor.log - tumor.log <- log2(network.tumor.data + 1); network.tumor.data <- tumor.final[deg_names, ]; tumor.final <- matched.tumor.data[genes.to.keep, ] 
+## normal data: normal.log - similarly to the above 
+
+## Build Patient–Patient similarity matrix (PSN)
+## We compute sample-sample similarity 
+psn.cor <- cor(tumor.log, method = "pearson")
+
+# Pre-Louvain preprocessing: Louvain expects non-negative weights
+diag(psn.cor) <- 0    # eliminate self-loops # could be eliminated as we set this directly in the igrapoh??
+psn.cor[psn.cor < 0] <- 0   # ensure that possible negative similarities would be set to 0
+
+## Sparsification of the network: via thresholding weak similarities 
+sim_thresh <- 0.78    # 0.78 seems to be the most reasonable threshold, allowing for 2 well-seprated communities and 3 disconnected nodes
+psn.cor.thresh <- psn.cor
+psn.cor.thresh[psn.cor.thresh < sim_thresh] <- 0
+
+## Build igraph PSN object
+g.psn <- graph_from_adjacency_matrix(
+  psn.cor.thresh,
+  mode    = "undirected",
+  weighted = TRUE,
+  diag    = FALSE
+)
+
+# Quick inspection of the graph
+g.psn
+summary(g.psn)
+
+# Vizualizations 
+# A simple one of the graph after thresholding
+set.seed(123) # reproducibility for the layout
+
+# Fruchterman-Reingold force-directed layout: It tries to place similar/connected nodes close together and reduce edge crossings.
+coords <- layout_with_fr(g.psn, weights = E(g.psn)$weight)
+
+plot(
+  g.psn,
+  layout = coords,
+  vertex.size = 8,
+  vertex.label = NA,  # hide labels for clarity
+  vertex.color = "skyblue",
+  edge.width = E(g.psn)$weight * 2, # scale by weight
+  edge.color = rgb(0, 0, 0, 0.2),   # semi-transparent edges
+  main = "Patient Similarity Network"
+)
+
+#### 5.B LOUVAIN COMMUNITY DETECTION  -----------------------------------------------
+set.seed(123) # reproducibility, to fix Louvain randomness
+louvain.res <- cluster_louvain(g.psn, weights = E(g.psn)$weight)
+
+# Basic info
+print(louvain.res)
+membership_vec <- membership(louvain.res)
+table(membership_vec)   # community sizes
+modularity(louvain.res) # modularity score
+
+## Set community membership as node attributes
+V(g.psn)$community <- membership_vec
+
+# Community membership
+comm <- V(g.psn)$community
+
+# Colorblind-safe pallette - cyan and yellow used for the biggest communities 
+paul_tol_bright <- c(
+  "#66CCEE", # cyan
+  "#CCBB44", # yellow
+  "#228833", # green
+  "#EE6677", # red/pink
+  "#AA3377", # purple
+  "#BBBBBB"  # grey
+)
+
+# Assign 1 color per community (in numeric order)
+comm_ids <- sort(unique(comm))
+pal <- setNames(paul_tol_bright[seq_along(comm_ids)], comm_ids)
+
+V(g.psn)$color <- pal[as.character(comm)]
+
+
+# Simple plot of the communities
+layout_psn <- layout_with_fr(g.psn)
+
+plot(
+  g.psn,
+  layout = layout_psn,
+  vertex.size  = 10,
+  vertex.label = NA,
+  vertex.color = V(g.psn)$color,
+  edge.width = E(g.psn)$weight * 2,
+  main = "Patient Similarity Network (Tumor, DEGs)\nLouvain Community Structure"
+)
+
+# Enhanced vizualization
+tg <- as_tbl_graph(g.psn)
+
+set.seed(123)
+ggraph(tg, layout = "fr") +
+  geom_edge_link(aes(width = weight), alpha = 0.2) +
+  geom_node_point(aes(color = factor(community)), size = 4) +
+  scale_color_manual(values = pal, name = "Community") +  # <-- matching colors
+  scale_edge_width(range = c(0.1, 2)) +
+  theme_void() +
+  ggtitle("Patient Similarity Network (Tumor, DEGs) \n Louvain Communities")
+
+# Barplot to highlight the community size
+comm_sizes <- sizes(louvain.res)
+
+barplot(
+  comm_sizes,
+  col  = pal[names(comm_sizes)],
+  main = "Community Sizes (Louvain on PSN)",
+  xlab = "Community",
+  ylab = "Number of Patients",
+  ylim = c(0, max(comm_sizes) * 1.15) 
+)
+
+# Viz with the patient codes - shorten them
+tg <- as_tbl_graph(g.psn)
+
+tg <- tg %>%
+  activate(nodes) %>%
+  mutate(label = name)
+
+set.seed(123)
+ggraph(tg, layout = "fr") +
+  geom_edge_link(aes(width = weight), alpha = 0.2) +
+  geom_node_point(aes(color = factor(community)), size = 4) +
+  geom_node_text(
+    aes(label = label, color = "darkgray"),
+    repel = FALSE,
+    size = 3,
+    vjust = -0.7,
+    show.legend = FALSE
+  ) +
+  scale_color_manual(values = pal, name = "Community") +
+  scale_edge_width(range = c(0.1, 2)) +
+  theme_void() +
+  ggtitle("Patient Similarity Network \n (Louvain Communities)")
+
+#### 5.C SIMILARITY NETWORK FUSION -----------------------------------------------
+
+# Prepare input matrices
+# Expression matrix for SNF (samples x features)
+tumor.log # genes x samples 
+tumor.log.short <- tumor.log
+colnames(tumor.log.short) <- substr(colnames(tumor.log), 1, 12)  
+pat_ids <- colnames(tumor.log.short)
+expr.mat <- t(tumor.log.short)  # now: rows = patients, columns = DEG expression features
+
+#length(intersect(substr(colnames(tumor.log.short),1,12), pat_ids)) # verify if the ids match
+#rownames(expr.mat) <- pat_ids  # shortens the row names into just the patient ids
+
+# Mutation matrix for the same patients
+# Built a mutation matrix 'mut.data' with: rows = mutation features-genes, columns = tumor patients
+query.mut <- GDCquery(
+  project = proj, 
+  data.category = "Simple Nucleotide Variation", 
+  data.type = "Masked Somatic Mutation"
+)
+
+GDCdownload(query.mut)
+mut.raw <- GDCprepare(query.mut)   # long MAF-like table; rows: genes, cols: features; genes for one patient are grouped and patients are concatanated one by one
+mut.maf <- mut.raw   
+
+mut.maf$Tumor_Sample_Barcode <- substr(mut.maf$Tumor_Sample_Barcode, 1, 12) # modify to the patient-id like before
+
+# Verify patients from our matched list that are not present in the mut.maf - no mutational data avail.
+missing_in_maf <- setdiff(pat_ids, unique(mut.maf$Tumor_Sample_Barcode))
+missing_in_maf # "TCGA-CU-A0YN" has no data avail.
+
+# The patient has no mutational data but still has sequencing data so we will keep him 
+#exclude_id <- "TCGA-CU-A0YN"
+#mut_pat_ids <- pat_ids[pat_ids != exclude_id]
+mut.maf_sub <- mut.maf[mut.maf$Tumor_Sample_Barcode %in% pat_ids, ]
+
+# Use gene symbol as mutation feature
+# Each row in mut.maf is one mutation event -> turn into patient x gene table; we force a row creation even for a patient missing mut data
+mut_table <- with(
+  mut.maf_sub,
+  table(
+    factor(Tumor_Sample_Barcode, levels = pat_ids),  # ensures one row per pat_id
+    Hugo_Symbol
+  )
+)
+
+dim(mut_table)
+
+# Binary mutation matrix: 1 if gene mutated in that patient
+mut.mat <- (mut_table > 0) * 1
+mut.mat <- as.matrix(mut.mat)
+
+# Reorder to match expression matrix
+mut.mat <- mut.mat[pat_ids, , drop = FALSE]
+
+# Check alignment
+stopifnot(rownames(expr.mat) == rownames(mut.mat))
+
+# Normalization
+expr.norm <- standardNormalization(as.matrix(expr.mat))
+mut.norm <- standardNormalization(as.matrix(mut.mat))
+
+# Build the affinity/PSN matrices for each layer
+# Parameters for SNF (you can tune K, alpha, T)
+K <- 4    # number of neighbors
+alpha <- 0.5   # scaling factor (as in SNFtool examples)
+T <- 20    # number of iterations
+
+# Distance matrices (samples x samples) - the diagonal are non-zero numbers not equal to 1
+dist.expr <- dist2(expr.norm, expr.norm)  # Euclidean distance
+dist.mut <- dist2(mut.norm, mut.norm)
+
+# Affinity / similarity matrices - these ARE the PSNs for each layer
+W.expr <- affinityMatrix(dist.expr, K, alpha)  # expression-based PSN
+W.mut <- affinityMatrix(dist.mut,  K, alpha)  # mutation-based PSN
+
+#rownames(W.expr) <- pat_ids
+#colnames(W.expr) <- pat_ids
+#rownames(W.mut)  <- pat_ids
+#colnames(W.mut)  <- pat_ids
+
+# Build SNF
+W.list <- list(expr = W.expr, mut = W.mut) 
+W.fused <- SNF(W.list, K, T)
+# W.fused is the fused patient similarity network (samples x samples)
+
+# Build igraph object from fused matrix
+g.fused <- graph_from_adjacency_matrix(
+  W.fused,
+  mode = "undirected",
+  weighted = TRUE,
+  diag = FALSE
+)
+
+# Apply Louvain on fused PSN
+set.seed(123)
+louvain.fused <- cluster_louvain(g.fused, weights = E(g.fused)$weight)
+membership_fused <- membership(louvain.fused)
+
+# Give names to membership_fused
+names(membership_fused) <- pat_ids
+
+# Community sizes
+table(membership_fused)
+modularity(louvain.fused)
+
+# Visualization of community structure
+set.seed(123)
+layout_fused <- layout_with_fr(g.fused)
+
+plot(
+  g.fused,
+  layout = layout_fused,
+  vertex.size = 6,
+  vertex.label = NA,
+  vertex.color = as.factor(membership_fused),
+  edge.width = E(g.fused)$weight * 2,
+  main = "Fused Patient Similarity Network (Expression + Mutation)\nLouvain Communities"
+)
+
+
+V(g.fused)$name <- rownames(expr.mat)              # same patients
+V(g.fused)$label <- substr(V(g.fused)$name, 1, 12)  # patient IDs
+V(g.fused)$cluster <- membership_fused
+
+plot(
+  g.fused,
+  layout = layout_fused,
+  vertex.size = 6,
+  vertex.label = V(g.fused)$label,
+  vertex.label.cex = 0.5,
+  vertex.color = as.factor(V(g.fused)$cluster),
+  edge.width = E(g.fused)$weight * 2,
+  main             = "Fused PSN (Expression + Mutation) with Louvain Communities"
+)
+
+# Asure that the order of patients is identical:
+names(membership_vec) <- pat_ids      # tumor PSN communities
+names(membership_fused) <- pat_ids    # fused PSN communities
+stopifnot(names(membership_vec) == names(membership_fused))
+
+# Cross-tabulation of communities
+table(Expression_Only = membership_vec,
+      Fused = membership_fused)
+
+ari <- adjustedRandIndex(membership_vec, membership_fused)
+cat("Adjusted Rand Index between expression-only and fused communities:", ari, "\n")
+
+comm_sizes_expr <- table(membership_vec)
+comm_sizes_fused <- table(membership_fused)
+par(mfrow = c(1, 2))
+
+# expression-only PSN
+barplot(
+  comm_sizes_expr,
+  col = pal[names(comm_sizes_expr)],
+  main = "Community Sizes (Expression-Only PSN)",
+  xlab = "Community",
+  ylab = "Number of Patients",
+  ylim = c(0, max(comm_sizes_expr) * 1.5)
+)
+
+# fused
+barplot(
+  comm_sizes_fused,
+  col = pal[names(comm_sizes_fused)],
+  main = "Community Sizes (Fused PSN: Expr + Mut)",
+  xlab = "Community",
+  ylab = "Number of Patients",
+  ylim = c(0, max(comm_sizes_fused) * 1.15)
+)
+
+# Reset plotting layout
+par(mfrow = c(1, 1))
 
 #Optional tasks ---------------------------
 
@@ -909,6 +1227,86 @@ deg_df$PolarScore <- deg_df$PosDegree - deg_df$NegDegree  # positive: more gaine
 combined_ranking <- deg_df[order(-abs(deg_df$PolarScore), -deg_df$TotalDiffDegree), ]
 write.csv(combined_ranking, "Differential_Hub_CombinedRanking.csv", row.names=FALSE)
 
+#---------------------------------------------------
+# Computation of the Patient Similarity Network 
+# using normal gene expression profile
+#---------------------------------------------------
 
+# Patient–Patient similarity (correlation between normal samples)
+# normal.log from section 3
+psn.cor.normal <- cor(normal.log, method = "pearson")  # patients x patients
+
+# Clean up: remove self-similarity and negative edges
+diag(psn.cor.normal) <- 0
+psn.cor.normal[psn.cor.normal < 0] <- 0
+
+# Threshold to sparsify: we apply the same applied to the tumor PSN previouisly
+sim_thresh_normal <- 0.78
+psn.cor.normal.thresh <- psn.cor.normal
+psn.cor.normal.thresh[psn.cor.normal.thresh < sim_thresh_normal] <- 0
+
+# Build PSN of normal samples
+g.psn.normal <- graph_from_adjacency_matrix(
+  psn.cor.normal.thresh,
+  mode = "undirected",
+  weighted = TRUE,
+  diag = FALSE
+)
+
+summary(g.psn.normal)
+
+# Check: tumor and normal columns correspond to the same patients, same order
+stopifnot(
+  substr(colnames(network.tumor.data), 1, 12) ==
+    substr(colnames(network.normal.data), 1, 12)
+)
+
+set.seed(123)
+louvain.normal <- cluster_louvain(g.psn.normal, weights = E(g.psn.normal)$weight)
+membership_normal <- membership(louvain.normal)
+
+# Community sizes & modularity
+table(membership_normal)
+modularity(louvain.normal)
+
+# Visualize
+set.seed(123)
+layout_normal <- layout_with_fr(g.psn.normal)
+
+plot(
+  g.psn.normal,
+  layout = layout_normal,
+  vertex.size = 10,
+  vertex.label = NA,
+  vertex.color = as.factor(membership_normal),
+  edge.width = E(g.psn.normal)$weight,
+  main = "Normal PSN (DEG Expression)\nLouvain Communities"
+)
+
+V(g.psn.normal)$name <- colnames(network.normal.data)
+V(g.psn.normal)$label <- substr(V(g.psn.normal)$name, 1, 12)
+
+plot(
+  g.psn.normal,
+  layout = layout_normal,
+  vertex.size = 10,
+  vertex.label = V(g.psn.normal)$label,
+  vertex.label.cex = 0.5,
+  vertex.color = as.factor(membership_normal),
+  edge.width = E(g.psn.normal)$weight,
+  main = "Normal PSN with Louvain Communities"
+)
+
+# Enhanced vizualization
+tg <- as_tbl_graph(g.psn.normal)
+
+set.seed(123)
+ggraph(tg, layout = "fr") +
+  geom_edge_link(aes(width = weight), alpha = 0.2) +
+  geom_node_point(aes(color = factor(membership_normal)), size = 4) +
+  scale_color_manual(values = pal, name = "Community") +  # <-- matching colors
+  scale_edge_width(range = c(0.1, 2)) +
+  theme_void() +
+  ggtitle("Normal PSN with Louvain Communities")
 
 
