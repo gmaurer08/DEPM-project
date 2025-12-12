@@ -1233,11 +1233,7 @@ hub_summary <- hub_summary[order(-hub_summary$TotalDiffDegree), ]
 write.csv(hub_summary, "Differential_Hub_Summary_annotated.csv", row.names=FALSE)
 
 # Build and plot hub subnetworks (separate for positive and negative)
-# Helper function: create subnetwork for hubs + first neighbours and plot
-library(igraph)
-
-# Helper function: plot hubs + first neighbors using igraph
-plot_hub_subnet_ggnet2 <- function(adj_mat, hub_list, deg_names, filename_prefix,
+plot_hub_subnet <- function(adj_mat, hub_list, deg_names, filename_prefix,
                                    hub_color = "#E74C3C", neighbor_color = "#95A5A6",
                                    title = NULL) {
   
@@ -1312,8 +1308,8 @@ plot_hub_subnet_ggnet2 <- function(adj_mat, hub_list, deg_names, filename_prefix
 }
 
 # Call plotting function for positive and negative hubs
-pos_net <- plot_hub_subnet_igraph(pos_diff.adj, top_pos_hubs, deg_names, "Positive_Diff_Hub_Subnetwork")
-neg_net <- plot_hub_subnet_igraph(neg_diff.adj, top_neg_hubs, deg_names, "Negative_Diff_Hub_Subnetwork",
+pos_net <- plot_hub_subnet(pos_diff.adj, top_pos_hubs, deg_names, "Positive_Diff_Hub_Subnetwork")
+neg_net <- plot_hub_subnet(neg_diff.adj, top_neg_hubs, deg_names, "Negative_Diff_Hub_Subnetwork",
                                   color_palette = c("Hub"="steelblue","Neighbor"="grey"))
 
 # Simple overlap and combined-ranking
