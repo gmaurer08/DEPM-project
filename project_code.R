@@ -20,7 +20,6 @@ library(GenomicRanges)
 library(SummarizedExperiment)
 library(DT)
 library(biomaRt) #new from laura
-library(network) #new
 library(mclust) #5C
 library(SNFtool) #5C
 library(igraph) #5A
@@ -169,7 +168,6 @@ cat("LFC > 0 (up) shows that 3,775 genes have a positive Log Fold Change. So,the
 cat("LFC < 0 (down) shows that 3,242 genes have a negative Log Fold Change. So,those genes are less active (silenced or suppressed) in the Tumor samples compared to normal tissue.")
 cat("outliers [1] is 0, So, the data is clean and no single patient is messing up the results, ouliers[2] is also 0, which makes sense because we deleted the rows (genes) with 0")
 
-
 # 2.3. Filtering DEGs (Applying Thresholds)
 
 # Project Guideline
@@ -209,7 +207,7 @@ volcano_data$diffexpressed[volcano_data$log2FoldChange > log2_fc_threshold & vol
 volcano_data$diffexpressed[volcano_data$log2FoldChange < -log2_fc_threshold & volcano_data$padj < padj_threshold] <- "DOWN"
 
 # plot
-ggplot(volcano_data, aes(x = log2FoldChange, y = -log10(padj), col = diffexpressed)) +
+p <- ggplot(volcano_data, aes(x = log2FoldChange, y = -log10(padj), col = diffexpressed)) +
   geom_point(alpha = 0.5) +
   theme_minimal() +
   scale_color_manual(values = c("DOWN" = "blue", "NO" = "grey", "UP" = "green")) +
@@ -220,7 +218,7 @@ ggplot(volcano_data, aes(x = log2FoldChange, y = -log10(padj), col = diffexpress
        x = "log2 Fold Change",
        y = "-log10 Adjusted P-value") +
   theme(legend.title = element_blank())
-
+ggsave("TCGA_BLCA_volcano_plot.pdf", plot = p, width = 8, height = 6)
 
 cat("Downregulated seems denser and has more points than the upregulated")
 cat("A loss of gene expression (genes being silenced or suppressed) is a dominant and characteristic feature of this specific cancer subtype compared to normal tissue, since the tails are not symetric")
@@ -418,7 +416,7 @@ net.normal %v% "type" = ifelse(network.vertex.names(net.normal) %in% hubs.normal
 net.normal %v% "color" = ifelse(net.normal %v% "type" == "Hub", "tomato", "green") #  color based on type
 
 # Plot the normal network
-normal_network_plot <- ggnet2(net.tumor, 
+normal_network_plot <- ggnet2(net.normal, 
                              color = "type",                 
                              palette = c("Hub" = "tomato", "Non-Hub" = "green"), 
                              size = "degree",                 
