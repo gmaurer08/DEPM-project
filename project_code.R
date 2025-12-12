@@ -30,7 +30,8 @@ library(igraph) #5A
 
 # File directory
 #setwd("C:/Users/galax/OneDrive/Dokumente/University/Magistrale/DEPM/Project")
-setwd("C:/Users/lamor/OneDrive/Documents/LAURITA/Sapienza/DE")
+#setwd("C:/Users/lamor/OneDrive/Documents/LAURITA/Sapienza/DE")
+setwd("/Users/home/Desktop")
 proj <- "TCGA-BLCA" # Bladder Urothelial Carcinoma
 dir.create(file.path(proj))
 
@@ -679,11 +680,10 @@ write.csv(data.frame(Gene=hubs.diff, Degree=k.diff[hubs.diff]),
 psn.cor <- cor(tumor.log, method = "pearson")
 
 # Pre-Louvain preprocessing: Louvain expects non-negative weights
-diag(psn.cor) <- 0    # eliminate self-loops # could be eliminated as we set this directly in the igrapoh??
 psn.cor[psn.cor < 0] <- 0   # ensure that possible negative similarities would be set to 0
 
 ## Sparsification of the network: via thresholding weak similarities 
-sim_thresh <- 0.78    # 0.78 seems to be the most reasonable threshold, allowing for 2 well-seprated communities and 3 disconnected nodes
+sim_thresh <- 0.86    # 0.86 seems to be the most reasonable threshold, allowing for 2 well-seprated communities and 3 disconnected nodes
 psn.cor.thresh <- psn.cor
 psn.cor.thresh[psn.cor.thresh < sim_thresh] <- 0
 
@@ -696,15 +696,21 @@ g.psn <- graph_from_adjacency_matrix(
 )
 
 # Quick inspection of the graph
+cat("Patient Similarity Network (Tumor):")
 g.psn
+cat("Summary of Patient Similarity Network (Tumor):")
 summary(g.psn)
+
+V(g.psn)$name <- substr(V(g.psn)$name, 1, 12) # shorten the patient names
 
 # Vizualizations 
 # A simple one of the graph after thresholding
-set.seed(123) # reproducibility for the layout
+set.seed(42) # reproducibility for the layout
 
 # Fruchterman-Reingold force-directed layout: It tries to place similar/connected nodes close together and reduce edge crossings.
 coords <- layout_with_fr(g.psn, weights = E(g.psn)$weight)
+
+png("psn_tumor_simple.png", width = 900, height = 900, res = 100)
 
 plot(
   g.psn,
@@ -714,18 +720,26 @@ plot(
   vertex.color = "skyblue",
   edge.width = E(g.psn)$weight * 2, # scale by weight
   edge.color = rgb(0, 0, 0, 0.2),   # semi-transparent edges
-  main = "Patient Similarity Network"
+  main = "Patient Similarity Network \n (Tumor)",
+  frame        = FALSE,   # no box
+  margin       = 0        # igraph's own margin around the layout
 )
+dev.off()
 
 #### 5.B LOUVAIN COMMUNITY DETECTION  -----------------------------------------------
-set.seed(123) # reproducibility, to fix Louvain randomness
+set.seed(42) # reproducibility, to fix Louvain randomness
 louvain.res <- cluster_louvain(g.psn, weights = E(g.psn)$weight)
 
 # Basic info
+cat("Louvain communities:")
 print(louvain.res)
+
 membership_vec <- membership(louvain.res)
 table(membership_vec)   # community sizes
+cat("As we can observe there are two prominent communities and 3 singletons.")
+
 modularity(louvain.res) # modularity score
+cat("Given our network size, modularity of 0.269 indicate moderate community structure")
 
 ## Set community membership as node attributes
 V(g.psn)$community <- membership_vec
@@ -751,6 +765,7 @@ V(g.psn)$color <- pal[as.character(comm)]
 
 
 # Simple plot of the communities
+png("psn_tumor_communities.png", width = 1200, height = 900, res = 150)
 layout_psn <- layout_with_fr(g.psn)
 
 plot(
@@ -762,40 +777,59 @@ plot(
   edge.width = E(g.psn)$weight * 2,
   main = "Patient Similarity Network (Tumor, DEGs)\nLouvain Community Structure"
 )
+dev.off()
 
 # Enhanced vizualization
 tg <- as_tbl_graph(g.psn)
 
-set.seed(123)
-ggraph(tg, layout = "fr") +
+set.seed(42)
+louvain_plot <- ggraph(tg, layout = "fr") +
   geom_edge_link(aes(width = weight), alpha = 0.2) +
   geom_node_point(aes(color = factor(community)), size = 4) +
-  scale_color_manual(values = pal, name = "Community") +  # <-- matching colors
+  scale_color_manual(values = pal, name = "Community") +
   scale_edge_width(range = c(0.1, 2)) +
   theme_void() +
   ggtitle("Patient Similarity Network (Tumor, DEGs) \n Louvain Communities")
 
+louvain_plot <- louvain_plot +
+  theme(
+    plot.margin = margin(t = 20, r = 20, b = 20, l = 20),
+    plot.title = element_text(hjust = 0.5, margin = margin(b = 10)),
+    legend.position = "right",
+    legend.margin = margin(t = 10, r = 10, b = 10, l = 10)
+  )
+
+ggsave("psn_tumor_louvain.png", louvain_plot,
+       width = 6, height = 4, dpi = 300,
+       bg = "white")
+
 # Barplot to highlight the community size
 comm_sizes <- sizes(louvain.res)
 
+png("psn_tumor_barplot.png", width = 1200, height = 900, res = 150)
+par(mar = c(5, 6, 4, 2) + 0.1)  
 barplot(
   comm_sizes,
-  col  = pal[names(comm_sizes)],
+  col = pal[names(comm_sizes)],
   main = "Community Sizes (Louvain on PSN)",
   xlab = "Community",
   ylab = "Number of Patients",
-  ylim = c(0, max(comm_sizes) * 1.15) 
+  ylim = c(0, max(comm_sizes) * 1.15),
+  cex.main = 1.7,
+  cex.lab = 1.5, 
+  cex.axis = 1.1   
 )
 
-# Viz with the patient codes - shorten them
+dev.off()
+# Viz with the patient codes
 tg <- as_tbl_graph(g.psn)
 
 tg <- tg %>%
   activate(nodes) %>%
   mutate(label = name)
 
-set.seed(123)
-ggraph(tg, layout = "fr") +
+set.seed(42)
+louvain_patients_plot <- ggraph(tg, layout = "fr") +
   geom_edge_link(aes(width = weight), alpha = 0.2) +
   geom_node_point(aes(color = factor(community)), size = 4) +
   geom_node_text(
@@ -808,7 +842,15 @@ ggraph(tg, layout = "fr") +
   scale_color_manual(values = pal, name = "Community") +
   scale_edge_width(range = c(0.1, 2)) +
   theme_void() +
-  ggtitle("Patient Similarity Network \n (Louvain Communities)")
+  ggtitle("Patient Similarity Network \n (Louvain Communities)") +
+  theme(
+    plot.margin = margin(t = 20, r = 20, b = 20, l = 20),
+    plot.title  = element_text(hjust = 0.5, margin = margin(b = 10)),
+    legend.margin = margin(10, 10, 10, 10)
+  )
+ggsave("psn_tumor_louvain_patients.png", louvain_patients_plot,
+       width = 6, height = 4, dpi = 300,
+       bg = "white")
 
 #### 5.C SIMILARITY NETWORK FUSION -----------------------------------------------
 
