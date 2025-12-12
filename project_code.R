@@ -1234,84 +1234,115 @@ write.csv(hub_summary, "Differential_Hub_Summary_annotated.csv", row.names=FALSE
 
 # Build and plot hub subnetworks (separate for positive and negative)
 plot_hub_subnet <- function(adj_mat, hub_list, deg_names, filename_prefix,
-                                   hub_color = "#E74C3C", neighbor_color = "#95A5A6",
-                                   title = NULL) {
+                            color_palette = c("Hub" = "#E74C3C",
+                                              "Neighbor" = "#95A5A6"),
+                            title = NULL) {
   
   hub_indices <- which(deg_names %in% hub_list)
-  if(length(hub_indices) == 0) {
+  if (length(hub_indices) == 0) {
     message("No hubs found for ", filename_prefix)
     return(NULL)
   }
   
-  # Find neighbors
-  is_neighbor <- colSums(adj_mat[hub_indices, , drop=FALSE]) > 0
-  nodes_keep <- unique(c(which(deg_names %in% hub_list), which(is_neighbor)))
+  # Find neighbors of hubs
+  is_neighbor <- colSums(adj_mat[hub_indices, , drop = FALSE]) > 0
+  nodes_keep <- unique(c(hub_indices, which(is_neighbor)))
   nodes_names <- deg_names[nodes_keep]
   
-  if(length(nodes_names) < 2) {
+  if (length(nodes_names) < 2) {
     message("Not enough nodes for ", filename_prefix)
     return(NULL)
   }
   
-  # Create subnetwork adjacency matrix
-  sub_adj <- adj_mat[nodes_names, nodes_names, drop=FALSE]
+  # Subnetwork adjacency matrix
+  sub_adj <- adj_mat[nodes_names, nodes_names, drop = FALSE]
   
-  # Convert to igraph for degree calculation
-  net_igraph <- graph_from_adjacency_matrix(sub_adj, mode="undirected", diag=FALSE)
+  # igraph for degree calculation
+  net_igraph <- graph_from_adjacency_matrix(
+    sub_adj, mode = "undirected", diag = FALSE
+  )
   node_degrees <- degree(net_igraph)
   
-  # Convert to network object for ggnet2
-  net_obj <- network(sub_adj, directed=FALSE)
+  # network object for ggnet2
+  net_obj <- network(sub_adj, directed = FALSE)
   
-  # Set node attributes
+  # Vertex attributes
   node_types <- ifelse(nodes_names %in% hub_list, "Hub", "Neighbor")
   network::set.vertex.attribute(net_obj, "node_type", node_types)
   network::set.vertex.attribute(net_obj, "degree", node_degrees)
   
-  # Create the plot
-  if(is.null(title)) {
-    title <- paste0(gsub("_", " ", filename_prefix), "\n(Hubs + First Neighbors)")
+  # Title
+  if (is.null(title)) {
+    title <- paste0(
+      gsub("_", " ", filename_prefix),
+      "\n(Hubs + First Neighbors)"
+    )
   }
   
-  p <- ggnet2(net_obj,
-              mode = "fruchtermanreingold",
-              node.size = "degree",
-              node.color = "node_type",
-              node.alpha = 0.8,
-              edge.alpha = 0.3,
-              edge.size = 0.5,
-              edge.color = "grey30",
-              palette = c("Hub" = hub_color, "Neighbor" = neighbor_color),
-              size.min = 2,
-              size.max = 8,
-              legend.position = "bottom") +
-    labs(title = title,
-         color = "Node Type",
-         size = "Degree") +
-    theme(plot.title = element_text(hjust = 0.5, size = 20, face = "bold"),
-          legend.title = element_text(size = 12),
-          legend.text = element_text(size = 10),
-          panel.background = element_rect(fill = "white"),
-          plot.background = element_rect(fill = "white"))
+  # Robust size scaling (prevents node dropping)
+  deg_vals <- node_degrees
+  size_min <- as.numeric(quantile(deg_vals, 0.05))
+  size_max <- as.numeric(quantile(deg_vals, 0.95))
   
-  # Save plot
-  ggsave(paste0(filename_prefix, "_ggnet2.png"), 
-         plot = p, 
-         width = 12, 
-         height = 10, 
-         dpi = 300,
-         bg = "white")
+  # Plot
+  p <- ggnet2(
+    net_obj,
+    mode = "fruchtermanreingold",
+    node.size = "degree",
+    node.color = "node_type",
+    node.alpha = 0.8,
+    edge.alpha = 0.3,
+    edge.size = 0.5,
+    edge.color = "grey30",
+    palette = color_palette,
+    size.min = size_min,
+    size.max = size_max,
+    legend.position = "bottom"
+  ) +
+    labs(
+      title = title,
+      color = "Node Type",
+      size = "Degree"
+    ) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 20, face = "bold"),
+      legend.title = element_text(size = 12),
+      legend.text = element_text(size = 10),
+      panel.background = element_rect(fill = "white"),
+      plot.background = element_rect(fill = "white")
+    )
   
-  message("Saved enhanced plot: ", paste0(filename_prefix, "_ggnet2.png"))
+  # Save
+  ggsave(
+    paste0(filename_prefix, "_ggnet2.png"),
+    plot = p,
+    width = 12,
+    height = 10,
+    dpi = 300,
+    bg = "white"
+  )
+  
+  message("Saved enhanced plot: ", filename_prefix, "_ggnet2.png")
   
   return(list(plot = p, network = net_obj, igraph = net_igraph))
 }
 
 # Call plotting function for positive and negative hubs
-pos_net <- plot_hub_subnet(pos_diff.adj, top_pos_hubs, deg_names, "Positive_Diff_Hub_Subnetwork")
-neg_net <- plot_hub_subnet(neg_diff.adj, top_neg_hubs, deg_names, "Negative_Diff_Hub_Subnetwork",
-                                  color_palette = c("Hub"="steelblue","Neighbor"="grey"))
+pos_net <- plot_hub_subnet(
+  pos_diff.adj,
+  top_pos_hubs,
+  deg_names,
+  "Positive_Diff_Hub_Subnetwork",
+  color_palette = c("Hub" = "#E74C3C", "Neighbor" = "#95A5A6")
+)
 
+neg_net <- plot_hub_subnet(
+  neg_diff.adj,
+  top_neg_hubs,
+  deg_names,
+  "Negative_Diff_Hub_Subnetwork",
+  color_palette = c("Hub" = "steelblue", "Neighbor" = "grey70")
+)
 # Simple overlap and combined-ranking
 # Genes that are hubs for positive vs negative (disjoint or overlapping)
 overlap_pos_neg <- intersect(top_pos_hubs, top_neg_hubs)
