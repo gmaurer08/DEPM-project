@@ -20,6 +20,9 @@ library(GenomicRanges)
 library(SummarizedExperiment)
 library(DT)
 library(biomaRt) #new from laura
+library(dplyr)
+library(tidygraph)
+library(ggraph)
 library(mclust) #5C
 library(SNFtool) #5C
 library(igraph) #5A
