@@ -679,6 +679,30 @@ write.csv(data.frame(Gene=hubs.diff, Degree=k.diff[hubs.diff]),
 ## We compute sample-sample similarity 
 psn.cor <- cor(tumor.log, method = "pearson")
 
+# We verify that the network is fully-connected and hence, sparcification is needed
+g.psn.cor <- graph_from_adjacency_matrix(
+  psn.cor,
+  mode    = "undirected",
+  weighted = TRUE,
+  diag    = FALSE
+)
+coords <- layout_with_fr(g.psn.cor, weights = E(g.psn.cor)$weight)
+
+png("psn_cor.png", width = 900, height = 900, res = 100)
+plot(
+  g.psn.cor,
+  layout = coords,
+  vertex.size = 8,
+  vertex.label = NA,  # hide labels for clarity
+  vertex.color = "skyblue",
+  edge.width = E(g.psn)$weight * 2, # scale by weight
+  edge.color = rgb(0, 0, 0, 0.2),   # semi-transparent edges
+  main = "Patient Similarity Network \n (Tumor)",
+  frame        = FALSE,   # no box
+  margin       = 0        # igraph's own margin around the layout
+)
+dev.off()
+
 # Pre-Louvain preprocessing: Louvain expects non-negative weights
 psn.cor[psn.cor < 0] <- 0   # ensure that possible negative similarities would be set to 0
 
@@ -834,7 +858,8 @@ louvain_patients_plot <- ggraph(tg, layout = "fr") +
   geom_edge_link(aes(width = weight), alpha = 0.2) +
   geom_node_point(aes(color = factor(community)), size = 4) +
   geom_node_text(
-    aes(label = label, color = "darkgray"),
+    aes(label = label),
+    #colour = "darkgray",
     repel = FALSE,
     size = 3,
     vjust = -0.7,
@@ -1307,7 +1332,7 @@ diag(psn.cor.normal) <- 0
 psn.cor.normal[psn.cor.normal < 0] <- 0
 
 # Threshold to sparsify: we apply the same applied to the tumor PSN previouisly
-sim_thresh_normal <- 0.78
+sim_thresh_normal <- 0.86
 psn.cor.normal.thresh <- psn.cor.normal
 psn.cor.normal.thresh[psn.cor.normal.thresh < sim_thresh_normal] <- 0
 
@@ -1327,7 +1352,7 @@ stopifnot(
     substr(colnames(network.normal.data), 1, 12)
 )
 
-set.seed(123)
+set.seed(42)
 louvain.normal <- cluster_louvain(g.psn.normal, weights = E(g.psn.normal)$weight)
 membership_normal <- membership(louvain.normal)
 
@@ -1336,9 +1361,9 @@ table(membership_normal)
 modularity(louvain.normal)
 
 # Visualize
-set.seed(123)
+set.seed(42)
 layout_normal <- layout_with_fr(g.psn.normal)
-
+png("louvain_normal.png", width = 900, height = 900, res = 100)
 plot(
   g.psn.normal,
   layout = layout_normal,
@@ -1348,10 +1373,11 @@ plot(
   edge.width = E(g.psn.normal)$weight,
   main = "Normal PSN (DEG Expression)\nLouvain Communities"
 )
-
+dev.off()
 V(g.psn.normal)$name <- colnames(network.normal.data)
 V(g.psn.normal)$label <- substr(V(g.psn.normal)$name, 1, 12)
 
+png("louvain_normal_2.png", width = 900, height = 900, res = 100)
 plot(
   g.psn.normal,
   layout = layout_normal,
@@ -1362,17 +1388,22 @@ plot(
   edge.width = E(g.psn.normal)$weight,
   main = "Normal PSN with Louvain Communities"
 )
+dev.off()
 
 # Enhanced vizualization
 tg <- as_tbl_graph(g.psn.normal)
 
-set.seed(123)
-ggraph(tg, layout = "fr") +
+set.seed(42)
+normal_louvain_plot <- ggraph(tg, layout = "fr") +
   geom_edge_link(aes(width = weight), alpha = 0.2) +
   geom_node_point(aes(color = factor(membership_normal)), size = 4) +
   scale_color_manual(values = pal, name = "Community") +  # <-- matching colors
   scale_edge_width(range = c(0.1, 2)) +
   theme_void() +
   ggtitle("Normal PSN with Louvain Communities")
+
+ggsave("psn_normal_louvain.png", normal_louvain_plot,
+       width = 6, height = 4, dpi = 300,
+       bg = "white")
 
 
