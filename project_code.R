@@ -697,7 +697,7 @@ plot(
   vertex.size = 8,
   vertex.label = NA,  # hide labels for clarity
   vertex.color = "skyblue",
-  edge.width = E(g.psn)$weight * 2, # scale by weight
+  edge.width = E(g.psn.cor)$weight * 2, # scale by weight
   edge.color = rgb(0, 0, 0, 0.2),   # semi-transparent edges
   main = "Patient Similarity Network \n (Tumor)",
   frame = FALSE,
