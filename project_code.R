@@ -741,7 +741,7 @@ cat("As we can observe there are two prominent communities and 3 singletons.")
 modularity(louvain.res) # modularity score
 cat("Given our network size, modularity of 0.269 indicate moderate community structure")
 
-## Set community membership as node attributes
+# Set community membership as node attributes
 V(g.psn)$community <- membership_vec
 
 # Community membership
@@ -821,7 +821,8 @@ barplot(
 )
 
 dev.off()
-# Viz with the patient codes
+
+# Vizualization with the patient codes
 tg <- as_tbl_graph(g.psn)
 
 tg <- tg %>%
@@ -856,8 +857,8 @@ ggsave("psn_tumor_louvain_patients.png", louvain_patients_plot,
 
 # Prepare input matrices
 # Expression matrix for SNF (samples x features)
-tumor.log # genes x samples 
-tumor.log.short <- tumor.log
+# tumor.log: genes x samples 
+tumor.log.short <- tumor.log 
 colnames(tumor.log.short) <- substr(colnames(tumor.log), 1, 12)  
 pat_ids <- colnames(tumor.log.short)
 expr.mat <- t(tumor.log.short)  # now: rows = patients, columns = DEG expression features
@@ -866,7 +867,7 @@ expr.mat <- t(tumor.log.short)  # now: rows = patients, columns = DEG expression
 #rownames(expr.mat) <- pat_ids  # shortens the row names into just the patient ids
 
 # Mutation matrix for the same patients
-# Built a mutation matrix 'mut.data' with: rows = mutation features-genes, columns = tumor patients
+# Built a mutation matrix 'mut.data' with: rows = mutation features, columns = tumor patients
 query.mut <- GDCquery(
   project = proj, 
   data.category = "Simple Nucleotide Variation", 
@@ -947,7 +948,7 @@ g.fused <- graph_from_adjacency_matrix(
 )
 
 # Apply Louvain on fused PSN
-set.seed(123)
+set.seed(42)
 louvain.fused <- cluster_louvain(g.fused, weights = E(g.fused)$weight)
 membership_fused <- membership(louvain.fused)
 
@@ -959,7 +960,9 @@ table(membership_fused)
 modularity(louvain.fused)
 
 # Visualization of community structure
-set.seed(123)
+set.seed(42)
+
+png("snf_communities_simple.png", width = 1200, height = 900, res = 150)
 layout_fused <- layout_with_fr(g.fused)
 
 plot(
@@ -968,27 +971,32 @@ plot(
   vertex.size = 6,
   vertex.label = NA,
   vertex.color = as.factor(membership_fused),
-  edge.width = E(g.fused)$weight * 2,
+  edge.width = E(g.fused)$weight * 5,
+  edge.color = "black",
   main = "Fused Patient Similarity Network (Expression + Mutation)\nLouvain Communities"
 )
+dev.off()
 
-
+# Plot with patient codes
 V(g.fused)$name <- rownames(expr.mat)              # same patients
 V(g.fused)$label <- substr(V(g.fused)$name, 1, 12)  # patient IDs
 V(g.fused)$cluster <- membership_fused
 
+png("snf_communities_patients.png", width = 1200, height = 900, res = 150)
 plot(
   g.fused,
   layout = layout_fused,
   vertex.size = 6,
   vertex.label = V(g.fused)$label,
-  vertex.label.cex = 0.5,
+  vertex.label.cex = 0.9,
   vertex.color = as.factor(V(g.fused)$cluster),
-  edge.width = E(g.fused)$weight * 2,
-  main             = "Fused PSN (Expression + Mutation) with Louvain Communities"
+  edge.width = E(g.fused)$weight * 5,
+  edge.color = "black",
+  main = "Fused PSN (Expression + Mutation)\n Louvain Communities"
 )
+dev.off()
 
-# Asure that the order of patients is identical:
+# Verify that the order of patients is identical:
 names(membership_vec) <- pat_ids      # tumor PSN communities
 names(membership_fused) <- pat_ids    # fused PSN communities
 stopifnot(names(membership_vec) == names(membership_fused))
@@ -1002,30 +1010,46 @@ cat("Adjusted Rand Index between expression-only and fused communities:", ari, "
 
 comm_sizes_expr <- table(membership_vec)
 comm_sizes_fused <- table(membership_fused)
-par(mfrow = c(1, 2))
 
-# expression-only PSN
+png("psn_barplots_expr_vs_fused.png", width = 1800, height = 900, res = 150, bg = "white")
+
+par(mfrow = c(1, 2),
+    mar = c(5, 6, 4, 2) + 0.1) 
+n_slots <- 5
+
+# Expression-only PSN
 barplot(
   comm_sizes_expr,
-  col = pal[names(comm_sizes_expr)],
-  main = "Community Sizes (Expression-Only PSN)",
+  col  = pal[names(comm_sizes_expr)],
+  main = "Expression-Only PSN",
   xlab = "Community",
   ylab = "Number of Patients",
-  ylim = c(0, max(comm_sizes_expr) * 1.5)
+  ylim = c(0, max(comm_sizes_expr) * 1.2),
+  xlim = c(0, n_slots + 1),
+  cex.main = 1.5,
+  cex.lab  = 1.4,
+  cex.axis = 1.2
 )
 
-# fused
+# Fused PSN
 barplot(
   comm_sizes_fused,
-  col = pal[names(comm_sizes_fused)],
-  main = "Community Sizes (Fused PSN: Expr + Mut)",
+  col  = pal[names(comm_sizes_fused)],
+  main = "Fused PSN: Expression + Mutation",
   xlab = "Community",
   ylab = "Number of Patients",
-  ylim = c(0, max(comm_sizes_fused) * 1.15)
+  ylim = c(0, max(comm_sizes_fused) * 1.3),
+  xlim = c(0, n_slots + 1),
+  cex.main = 1.5,
+  cex.lab  = 1.4,
+  cex.axis = 1.2
 )
 
-# Reset plotting layout
+# Reset layout
 par(mfrow = c(1, 1))
+
+dev.off()
+
 
 #Optional tasks ---------------------------
 
